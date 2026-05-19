@@ -16,8 +16,13 @@ include = "jobspy"
 [tool.black]
 line-length = 88
 
+[dependency-groups]
+dev = [
+    "playwright>=1.60.0",
+]
+
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.12"
 requests = "^2.31.0"
 beautifulsoup4 = "^4.12.2"
 pandas = "^2.1.0"

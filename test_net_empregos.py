@@ -1,0 +1,42 @@
+from jobspy.net_empregos import NetEmpregos
+from jobspy.model import ScraperInput, DescriptionFormat, Site
+
+def run_test():
+    print("Initializing NetEmpregos Scraper...")
+    scraper = NetEmpregos()
+    
+    test_input = ScraperInput(
+        site_type=[Site.NET_EMPREGOS], 
+        search_term="Python|5",
+        location="2",
+        results_wanted=5,
+        description_format=DescriptionFormat.PLAIN,
+        offset=0,
+        distance=50,
+        is_remote=False,
+        job_type=None,
+        hours_old=None
+    )
+
+    try:
+        print(f"Executing scrape for term: '{test_input.search_term}' in '{test_input.location}'...")
+        response = scraper.scrape(test_input)
+        
+        print("\n--- TEST RESULTS ---")
+        print(f"Total jobs found: {len(response.jobs)}")
+        
+        for idx, job in enumerate(response.jobs, 1):
+            print(f"\n[{idx}] {job.title}")
+            print(f"    Company:  {job.company_name}")
+            print(f"    Location: {job.location.city if job.location else 'N/A'}")
+            print(f"    URL:      {job.job_url}")
+            print(f"    Remote:   {job.is_remote}")
+            print(f"    Emails:   {job.emails}")
+            if job.description:
+                print(f"    Desc Snippet: {job.description[:100]}...")
+                
+    except Exception as e:
+        print(f"\nExecution failed with error:\n{e}")
+
+if __name__ == "__main__":
+    run_test()
