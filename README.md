@@ -1,3 +1,9 @@
+## Added two portuguese job boards (net-empregos and sapo)
+- Fully normalized and function within the jobspy sctructure (tho sapo offers work model extraction (hibrid, remote, on site))
+
+## Creating API endpoint and sqlite db to save jobs and filtering
+
+
 <img src="https://github.com/cullenwatson/JobSpy/assets/78247585/ae185b7e-e444-4712-8bb9-fa97f53e896b" width="400">
 
 **JobSpy** is a job scraping library with the goal of aggregating all the jobs from popular job boards with one tool.
