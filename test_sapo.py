@@ -7,8 +7,8 @@ def run_test():
     
     test_input = ScraperInput(
         site_type=[Site.SAPO],
-        search_term="|informatica-tecnologias|teletrabalho",
-        location="",
+        search_term="Python|informatica",
+        location="Porto",
         results_wanted=10,
         description_format=DescriptionFormat.PLAIN,
         job_type=None,
@@ -27,6 +27,7 @@ def run_test():
             print(f"    Company:  {job.company_name}")
             print(f"    Location: {job.location.city if job.location else 'N/A'}")
             print(f"    URL:      {job.job_url}")
+            print(f"    Model:     {job.work_model}")
             if job.description:
                 print(f"    Desc Snippet: {job.description[:100]}...")
                 

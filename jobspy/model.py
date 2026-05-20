@@ -236,6 +236,7 @@ class DescriptionFormat(Enum):
     HTML = "html"
     PLAIN = "plain"
 
+
 class JobPost(BaseModel):
     id: str | None = None
     title: str
@@ -254,7 +255,7 @@ class JobPost(BaseModel):
     emails: list[str] | None = None
     is_remote: bool | None = None
     listing_type: str | None = None
-
+    work_model: Optional[str] = None
     # LinkedIn specific
     job_level: str | None = None
 
@@ -295,6 +296,7 @@ class Site(Enum):
     BDJOBS = "bdjobs"
     NET_EMPREGOS = "net_empregos"
     SAPO = "sapo"
+
 
 
 class SalarySource(Enum):

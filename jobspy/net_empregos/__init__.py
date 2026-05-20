@@ -1,15 +1,21 @@
 from __future__ import annotations
-import requests
 import math
 import random
 import time
+import unicodedata
 from datetime import datetime
 from typing import Optional
 
+import requests
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from jobspy.net_empregos.constant import headers
+# Import centralized mappings alongside your existing headers config
+from jobspy.net_empregos.constant import (
+    headers, 
+    NET_EMPREGOS_DISTRICTS, 
+    NET_EMPREGOS_CATEGORIES
+)
 from jobspy.net_empregos.util import (
     parse_net_empregos_job_type,
     is_job_remote,
@@ -36,6 +42,18 @@ from jobspy.util import (
 log = create_logger("NetEmpregos")
 
 
+def clean_parameter_string(text: str) -> str:
+    """
+    Helper function to lowercase, strip accents, and remove messy formatting 
+    symbols to ensure accurate dictionary lookups.
+    """
+    if not text:
+        return ""
+    text = unicodedata.normalize('NFKD', text)
+    text = "".join([c for c in text if not unicodedata.combining(c)])
+    return text.lower().strip()
+
+
 class NetEmpregos(Scraper):
     base_url = "https://www.net-empregos.com"
     delay = 4       
@@ -53,187 +71,118 @@ class NetEmpregos(Scraper):
             proxies=self.proxies,
             ca_cert=ca_cert,
             is_tls=False,
-            has_retry=True,
-            delay=5,
-            clear_cookies=False,
         )
-        self.session.headers.update(headers)
-        self.scraper_input = None
-
-        # PRE-FLIGHT HYDRATION:
-        # Request the homepage first to inherit valid session tokens before querying search routes
+        if user_agent:
+            self.session.headers.update({"User-Agent": user_agent})
+        else:
+            self.session.headers.update(headers)
+            
+        self.scraper_input: Optional[ScraperInput] = None
+        
+        # Prime session cookie state
         try:
-            log.info("Establishing authentic pre-flight session tokens...")
             self.session.get(self.base_url, timeout=10)
-            self.session.headers.update({"Referer": f"{self.base_url}/"})
         except Exception as e:
             log.warning(f"Failed to prime session token array: {str(e)}")
 
     def scrape(self, scraper_input: ScraperInput) -> JobResponse:
-        """
-        Scrapes Net-Empregos for jobs matching criteria using explicit numerical IDs
-        """
         self.scraper_input = scraper_input
         job_list: list[JobPost] = []
-        seen_ids = set()
+        
+        # 1. Map Location parameters safely
+        raw_location = scraper_input.location or ""
+        mapped_location_id = NET_EMPREGOS_DISTRICTS.get(clean_parameter_string(raw_location), "0")
+        
+        # 2. Extract pipeline configurations and map categories
+        parts = scraper_input.search_term.split("|")
+        keyword = parts[0].strip()
+        
+        raw_category = parts[1].strip() if len(parts) > 1 else "0"
+        if raw_category.isdigit():
+            category_id = raw_category
+        else:
+            category_id = NET_EMPREGOS_CATEGORIES.get(clean_parameter_string(raw_category), "0")
+            
+        raw_tipo = parts[2].strip() if len(parts) > 2 else "0"
+        tipo_id = raw_tipo if raw_tipo.isdigit() else "0"
         
         page_num = 1
-        request_count = 0
+        processed_count = 0
         
-        continue_search = (
-            lambda: len(job_list) < scraper_input.results_wanted and page_num <= 10
-        )
-
-        #Expects stringified integers like "2" for Porto
-        zone_id = "0"
-        if scraper_input.location:
-            loc_input = scraper_input.location.strip()
-            zone_id = loc_input if loc_input.isdigit() else "0"
-
-        #Expects "Keyword|CategoryID" format like "Python|5"
-        search_keyword = ""
-        category_id = "0"
-        tipo_id = "0"
-
-        if scraper_input.search_term:
-            term_input = scraper_input.search_term.strip()
-            if "|" in term_input:
-                parts = term_input.split("|", 1)
-                search_keyword = parts[0].strip()
-                category_id = parts[1].strip() if parts[1].strip().isdigit() else "0"
-                tipo_id = parts[2].strip() if len(parts) > 2 and parts[2].strip().isdigit() else "0"
-            else:
-                search_keyword = term_input
-
-        while continue_search():
-            request_count += 1
-            log.info(
-                f"search page: {request_count} / {math.ceil(scraper_input.results_wanted / 10)}"
+        while processed_count < scraper_input.results_wanted:
+            # Build query matching exact target parameters linked by ampersands
+            search_url = (
+                f"{self.base_url}/pesquisa-empregos.asp"
+                f"?chaves={keyword}&categoria={category_id}&zona={mapped_location_id}"
+                f"&tipo={tipo_id}&page={page_num}"
             )
             
-            params = {
-                "chaves": search_keyword,
-                "cidade": "",
-                "categoria": category_id,
-                "zona": zone_id,
-                "tipo": 0,
-                "page": page_num
-            }
-
-            full_request_url = self.session.prepare_request(
-                requests.Request("GET", f"{self.base_url}/pesquisa-empregos.asp", params=params)
-            ).url
-            log.info(f"Targeting URL: {full_request_url}")
-            
             try:
-                response = self.session.get(
-                    f"{self.base_url}/pesquisa-empregos.asp",
-                    params=params,
-                    timeout=10,
-                )
-                if response.status_code not in range(200, 400):
-                    log.error(f"Net-Empregos status error code: {response.status_code}")
-                    return JobResponse(jobs=job_list)
+                response = self.session.get(search_url, timeout=10)
+                response.raise_for_status()
             except Exception as e:
-                log.error(f"Net-Empregos connection error: {str(e)}")
-                return JobResponse(jobs=job_list)
-
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            job_rows = soup.find_all("div", class_="oferta") or soup.find_all("div", class_="job-item")
-            if not job_rows:
-                job_rows = [div for div in soup.find_all("div") if div.get("id") and div["id"].startswith("oferta-")]
+                log.error(f"Network processing drop at page {page_num}: {str(e)}")
+                break
                 
-            if len(job_rows) == 0:
-                log.info("No job layout structures found on this page. Stopping pagination.")
-                break
-
-            new_jobs_on_page = 0
-
-            for row in job_rows:
-                link_tag = row.find("a", href=True)
-                if link_tag:
-                    href = link_tag["href"]
-                    
-                    if "pesquisa-emprego" in href or "anunciar-emprego" in href or href == "#":
-                        continue
-                        
-                    try:
-                        job_id_match = href.split("-")[-1].replace(".asp", "")
-                    except:
-                        continue
-                    
-                    if job_id_match in seen_ids:
-                        continue
-                    seen_ids.add(job_id_match)
-                    new_jobs_on_page += 1
-
-                    try:
-                        job_post = self._process_row(row, job_id_match, href)
-                        if job_post:
-                            job_list.append(job_post)
-                        if not continue_search():
-                            break
-                    except Exception as e:
-                        log.error(f"Row processing error: {str(e)}")
-
-            if new_jobs_on_page == 0:
-                log.info("Page contains duplicate items or default trending metrics. Halting pagination loop.")
-                break
-
-            if continue_search():
-                base_sleep = random.uniform(self.delay, self.delay + self.band_delay)
-                if random.random() < 0.15:
-                    human_break = random.uniform(6.0, 12.0)
-                    time.sleep(base_sleep + human_break)
-                else:
-                    time.sleep(base_sleep)
-                page_num += 1
-
-        job_list = job_list[: scraper_input.results_wanted]
-        return JobResponse(jobs=job_list)
-
-    def _process_row(self, row: Tag, job_id: str, job_path: str) -> Optional[JobPost]:
-        title_element = row.find("a", class_="titulo") or row.find("h2") or row.find("a")
-        if not title_element:
-            return None
+            soup = BeautifulSoup(response.text, "html.parser")
+            job_rows = soup.find_all("div", class_="oferta") or soup.find_all("div", class_="job-item")
             
-        title = clean_html_text(title_element.get_text())
-
-        company_element = row.find("a", class_="empresa") or row.find("span", class_="empresa")
-        company = clean_html_text(company_element.get_text()) if company_element else "N/A"
-        
-        location_element = row.find("span", class_="local") or row.find("div", class_="local")
-        location_name = clean_html_text(location_element.get_text()) if location_element else "Portugal"
-
-        location = Location(
-            city=location_name,
-            country=Country.from_string("portugal")
-        )
-
-        description = ""
-        try:
-            job_details = self._get_job_details(job_path)
-            if job_details:
-                description = job_details.get("description", "")
-        except Exception as detail_err:
-            log.warning(f"Could not pull full description for job {job_id}: {detail_err}")
-
-        is_remote = is_job_remote(title, description, location_name)
-        job_types = parse_net_empregos_job_type(title, description)
-
-        return JobPost(
-            id=f"ne-{job_id}",
-            title=title,
-            company_name=company,
-            location=location,
-            is_remote=is_remote,
-            date_posted=datetime.now().date(),
-            job_url=f"{self.base_url}/{job_path}" if not job_path.startswith("http") else job_path,
-            job_type=job_types,
-            description=description,
-            emails=extract_emails_from_text(description),
-        )
+            if not job_rows:
+                log.info(f"No job layout structures found on this page index context. Stopping pagination loop.")
+                break
+                
+            for row in job_rows:
+                if processed_count >= scraper_input.results_wanted:
+                    break
+                    
+                # Identify detail hyperlinks
+                link_tag = row.find("a", href=True)
+                if not link_tag:
+                    continue
+                    
+                job_path = link_tag["href"]
+                job_id = job_path.split("-")[-1].replace(".asp", "").strip()
+                
+                # Deep dive fetch for description text structures
+                details = self._get_job_details(job_path)
+                description = details.get("description", "")
+                
+                # Extract descriptive metadata from row anchors
+                title_el = row.find("h2") or row.find(class_="title")
+                title = clean_html_text(title_el.get_text()) if title_el else "N/A"
+                
+                company_el = row.find("div", class_="empresa") or row.find("span", class_="company")
+                company = clean_html_text(company_el.get_text()) if company_el else "N/A"
+                
+                location_el = row.find("div", class_="local") or row.find("span", class_="location")
+                location_str = clean_html_text(location_el.get_text()) if location_el else raw_location
+                
+                # Supply positional variable specifications expected by util.py
+                job_types = parse_net_empregos_job_type(title, description)
+                is_remote = is_job_remote(title, description, location_str)
+                
+                job_post = JobPost(
+                    id=f"ne-{job_id}",
+                    title=title,
+                    company_name=company,
+                    location=Location(city=location_str, country=Country.PORTUGAL),
+                    is_remote=is_remote,
+                    date_posted=datetime.now().date(),
+                    job_url=f"{self.base_url}/{job_path}" if not job_path.startswith("http") else job_path,
+                    job_type=job_types,
+                    description=description,
+                    emails=extract_emails_from_text(description),
+                )
+                
+                job_list.append(job_post)
+                processed_count += 1
+                
+                # Respect anti-throttle request pacing
+                time.sleep(random.uniform(self.delay, self.delay + self.band_delay))
+                
+            page_num += 1
+            
+        return JobResponse(jobs=job_list)
 
     def _get_job_details(self, job_path: str) -> dict:
         """
@@ -247,9 +196,11 @@ class NetEmpregos(Scraper):
             return {}
 
         soup = BeautifulSoup(response.text, "html.parser")
-        desc_div = soup.find("div", class_="description") or soup.find("div", class_="job-description")
         
-        description = None
+        # Unconstrained class search covers variations in container tags across different layouts
+        desc_div = soup.find(class_="description") or soup.find(class_="job-description") or soup.find(id="oferta-desc")
+        
+        description = ""
         if desc_div is not None:
             description = desc_div.prettify(formatter="html")
             

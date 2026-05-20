@@ -7,8 +7,8 @@ def run_test():
     
     test_input = ScraperInput(
         site_type=[Site.NET_EMPREGOS], 
-        search_term="Python|5",
-        location="2",
+        search_term="Python|programacao",
+        location="Porto",
         results_wanted=5,
         description_format=DescriptionFormat.PLAIN,
         offset=0,
